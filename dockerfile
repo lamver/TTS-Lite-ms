@@ -13,6 +13,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Делаем скрипт исполняемым внутри образа
+RUN chmod +x download_models.sh
+
+# Скрипт будет запускаться первым, а затем вызывать CMD
+ENTRYPOINT ["./download_models.sh"]
+
 # Проверьте, что в .env WORKERS=48, а не больше, чем ядер
 CMD gunicorn main:app \
     -w ${WORKERS:-4} \

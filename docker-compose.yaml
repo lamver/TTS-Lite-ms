@@ -6,7 +6,7 @@ services:
     ports:
       - "${PORT:-8000}:${PORT:-8000}"
     volumes:
-      - ./models:/app/models
+      - ./piper_models:/app/piper_models
       - ./outputs:/app/outputs
     deploy:
       resources:

@@ -1,3 +1,6 @@
 .env
 models/*
 outputs/*
+piper-voices/*
+.venv/*
+piper_models/*
