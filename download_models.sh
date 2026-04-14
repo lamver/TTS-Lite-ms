@@ -2,7 +2,7 @@
 MODEL_DIR="/app/piper_models"
 # Один список для всего
 #LANGS="ru en es de fr it pt pl uk tr"
-LANGS="ru en es "
+LANGS="${LANGS:-ru en}"
 
 echo "Проверка моделей для языков: $LANGS"
 
