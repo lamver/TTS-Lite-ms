@@ -1,14 +1,152 @@
+import asyncio
+import aio_pika
 import os
 import uuid
 import wave
 import json
 import glob
-from fastapi import FastAPI, HTTPException, Query, Response
+import aioboto3
+from fastapi import FastAPI, HTTPException, Query, Response, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
 from piper.voice import PiperVoice
 
 app = FastAPI(title="Piper TTS Microservice")
 
+RABBIT_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
+IN_QUEUE = os.getenv("QUEUE_NAME", "text_to_voice_lite_piter")
+OUT_QUEUE = os.getenv("QUEUE_NAME", "text_to_voice_lite_piter_result")
+
+# Настройки S3 из окружения
+S3_CONFIG = {
+    "endpoint_url": os.getenv("S3_ENDPOINT"),
+    "aws_access_key_id": os.getenv("S3_ACCESS_KEY"),
+    "aws_secret_access_key": os.getenv("S3_SECRET_KEY"),
+}
+BUCKET_NAME = os.getenv("S3_BUCKET")
+
+async def upload_to_s3(local_path, s3_key):
+    """Загружает файл в S3 и возвращает путь (key)"""
+    session = aioboto3.Session()
+    async with session.client("s3", **S3_CONFIG) as s3:
+        with open(local_path, "rb") as f:
+            await s3.put_object(
+                Bucket=BUCKET_NAME,
+                Key=s3_key,
+                Body=f,
+                ContentType="audio/wav"
+            )
+    return s3_key
+
+
+async def send_result(channel, request_id, success: bool):
+    try:
+        payload = json.dumps({"requestId": request_id, "status": success}).encode()
+        await channel.default_exchange.publish(
+            aio_pika.Message(body=payload, delivery_mode=aio_pika.DeliveryMode.PERSISTENT),
+            routing_key=OUT_QUEUE
+        )
+        print(f"--- РЕЗУЛЬТАТ ОТПРАВЛЕН: {request_id} (status: {success}) ---", flush=True)
+    except Exception as e:
+        print(f"--- ОШИБКА ОТПРАВКИ РЕЗУЛЬТАТА: {e} ---", flush=True)
+
+async def send_error_result(channel, request_id, error_message):
+    """Отправляет отчет об ошибке в результирующую очередь"""
+    payload = json.dumps({
+        "requestId": request_id,
+        "status": False,
+        "error": error_message
+    }).encode()
+    
+    await channel.default_exchange.publish(
+        aio_pika.Message(
+            body=payload, 
+            delivery_mode=aio_pika.DeliveryMode.PERSISTENT
+        ),
+        routing_key=OUT_QUEUE
+    )
+    
+async def process_mq_tasks():
+    while True:
+        try:
+            connection = await aio_pika.connect_robust(RABBIT_URL)
+            async with connection:
+                channel = await connection.channel()
+                in_queue = await channel.declare_queue(IN_QUEUE, durable=True)
+                await channel.declare_queue(OUT_QUEUE, durable=True)
+                await channel.set_qos(prefetch_count=1)
+
+                async with in_queue.iterator() as queue_iter:
+                    async for message in queue_iter:
+                        request_id = "unknown"
+                        try:
+                            data = json.loads(message.body.decode())
+                            request_id = data.get("requestId")
+                            text = data.get("text")
+                            
+                            print(f"--- [ВЗЯЛ]: {request_id} ---", flush=True)
+
+                            # 1. Синтез
+                            local_file = await run_synthesis(request_id, text, data.get("model"), data.get("speaker"))
+                            
+                            if local_file is None:
+                                raise ValueError("run_synthesis returned None. Check return statement!")
+
+                            # 2. Проверка S3 конфига перед загрузкой
+                            if not all([os.getenv("S3_ENDPOINT"), os.getenv("S3_BUCKET")]):
+                                raise ValueError("S3 Config is missing in ENV variables!")
+
+                            s3_path = f"WORKERS/{IN_QUEUE}/{request_id}/{request_id}.wav"
+                            
+                            # 3. Загрузка
+                            await upload_to_s3(local_file, s3_path)
+
+                            # 4. Результат
+                            res_data = {"requestId": request_id, "status": True, "path": s3_path}
+                            await channel.default_exchange.publish(
+                                aio_pika.Message(body=json.dumps(res_data).encode()),
+                                routing_key=OUT_QUEUE
+                            )
+
+                            if os.path.exists(local_file): os.remove(local_file)
+                            await message.ack()
+                            print(f"--- [УСПЕХ]: {request_id} ---", flush=True)
+
+                        except Exception as e:
+                            print(f"--- [ОШИБКА]: {request_id} | {e} ---", flush=True)
+                            # Отправляем ошибку в очередь результатов
+                            await send_error_result(channel, request_id, str(e))
+                            await message.ack()
+        except Exception as e:
+            print(f"--- [КРИТИЧЕСКАЯ ОШИБКА MQ]: {e} ---", flush=True)
+            await asyncio.sleep(10)
+            
+async def run_synthesis(request_id, text, model_id, speaker):
+    # (Логика остается прежней: загрузка модели + synthesize в asyncio.to_thread)
+    if model_id not in loaded_voices:
+        m_info = models_registry.get(model_id)
+        if not m_info: raise Exception(f"Model {model_id} not found")
+        loaded_voices[model_id] = PiperVoice.load(m_info["path"], m_info["config_path"])
+
+    voice = loaded_voices[model_id]
+    m_info = models_registry[model_id]
+    
+    speaker_id = None
+    if speaker:
+        if m_info["speaker_ids"] and speaker in m_info["speaker_ids"]:
+            speaker_id = m_info["speaker_ids"][speaker]
+        elif str(speaker).isdigit():
+            speaker_id = int(speaker)
+
+    file_path = os.path.join(OUTPUTS_DIR, f"{request_id}.wav")
+    
+    def _sync_synth():
+        with wave.open(file_path, "wb") as wav_file:
+            voice.synthesize(text, wav_file, speaker_id=speaker_id)
+
+    await asyncio.to_thread(_sync_synth)
+    
+    return file_path
+    
 # Конфигурация из окружения
 MODELS_DIR = "piper_models"
 OUTPUTS_DIR = "outputs"
@@ -72,6 +210,7 @@ def scan_models():
 
 @app.on_event("startup")
 async def startup_event():
+    print("!!!!!!!!!! SERVER IS STARTING NOW !!!!!!!!!!!", flush=True)
     """Срабатывает при запуске контейнера"""
     global models_registry
     print(f"--- Scanning directory: {MODELS_DIR} ---")
@@ -86,6 +225,8 @@ async def startup_event():
             print(f"--- Default model '{DEFAULT_MODEL}' is ready ---")
         except Exception as e:
             print(f"--- Failed to preload default model: {e} ---")
+            
+    asyncio.create_task(process_mq_tasks())
 
 @app.get("/models")
 async def get_models():
@@ -143,6 +284,25 @@ async def generate(
     
     return FileResponse(path=file_path, media_type="audio/wav", filename=f"{target_id}_{file_id}")
 
+@app.get("/get-audio/{filename}")
+async def get_audio(filename: str, background_tasks: BackgroundTasks):
+    """Отдает WAV файл и удаляет его после скачивания"""
+    # Безопасно формируем путь к файлу
+    file_path = os.path.join(OUTPUTS_DIR, filename)
+    
+    # Проверяем, существует ли он и не пытаются ли нас взломать через ../
+    if not os.path.exists(file_path) or ".." in filename:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    # Добавляем задачу на удаление файла ПОСЛЕ отправки ответа
+    background_tasks.add_task(os.remove, file_path)
+    
+    return FileResponse(
+        path=file_path, 
+        media_type="audio/wav", 
+        filename=filename
+    )
+    
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
     return Response(status_code=204)

@@ -6,8 +6,9 @@ services:
     ports:
       - "${PORT:-8000}:${PORT:-8000}"
     volumes:
-      - ./piper_models:/app/piper_models
-      - ./outputs:/app/outputs
+      - .:/app
+    environment:
+      - PYTHONUNBUFFERED=1
     deploy:
       resources:
         limits:

@@ -4,3 +4,4 @@ outputs/*
 piper-voices/*
 .venv/*
 piper_models/*
+__pycache__/*
