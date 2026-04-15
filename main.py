@@ -96,9 +96,14 @@ async def process_mq_tasks():
                                 raise ValueError("S3 Config is missing in ENV variables!")
 
                             s3_path = f"WORKERS/{IN_QUEUE}/{request_id}/{request_id}.wav"
-                            
+                            short_text = text[:100].replace("\n", " ") 
                             # 3. Загрузка
-                            await upload_to_s3(local_file, s3_path)
+                            await upload_to_s3(local_file, s3_path, metadata={"text": short_text})
+                            
+                            # 3. УДАЛЕНИЕ СРАЗУ ПОСЛЕ S3
+                            if os.path.exists(local_file):
+                                os.remove(local_file)
+                                print(f"--- [ФАЙЛ УДАЛЕН ПОСЛЕ S3]: {local_file} ---", flush=True)
 
                             # 4. Результат
                             res_data = {"requestId": request_id, "status": True, "path": s3_path}
