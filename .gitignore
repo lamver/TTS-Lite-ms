@@ -5,3 +5,4 @@ piper-voices/*
 .venv/*
 piper_models/*
 __pycache__/*
+.aider*
