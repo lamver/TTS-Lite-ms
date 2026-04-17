@@ -307,6 +307,45 @@ async def get_audio(filename: str, background_tasks: BackgroundTasks):
         media_type="audio/wav", 
         filename=filename
     )
+
+@app.get("/sample/{model_id}/{speaker_name}")
+async def get_speaker_sample(model_id: str, speaker_name: str):
+    """Возвращает пример голоса конкретного спикера (файл .mp3 из папки samples)"""
+    if model_id not in models_registry:
+        raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
+    
+    model_info = models_registry[model_id]
+    samples_dir = os.path.join(os.path.dirname(model_info["config_path"]), "samples")
+    
+    # Проверяем наличие подпапки samples
+    if not os.path.exists(samples_dir):
+        raise HTTPException(status_code=404, detail=f"No samples directory for model '{model_id}'")
+    
+    # Поиск файлов, связанных с указанным спикером (например, speaker_name.mp3 или speaker_name_*.mp3)
+    possible_files = [
+        f for f in os.listdir(samples_dir) 
+        if f.endswith(".mp3") and speaker_name in f
+    ]
+    
+    if not possible_files:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"No sample found for speaker '{speaker_name}' in model '{model_id}'"
+        )
+    
+    # Выбираем первый подходящий файл
+    sample_file = possible_files[0]
+    sample_path = os.path.join(samples_dir, sample_file)
+    
+    # Проверяем существование файла
+    if not os.path.exists(sample_path):
+        raise HTTPException(status_code=404, detail="Sample file not accessible")
+    
+    return FileResponse(
+        path=sample_path,
+        media_type="audio/mpeg",
+        filename=sample_file
+    )
     
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
