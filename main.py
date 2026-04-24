@@ -82,9 +82,9 @@ async def process_mq_tasks():
                             data = json.loads(message.body.decode())
                             request_id = data.get("requestId")
                             text = data.get("text")
-                            
-                            print(f"--- [ВЗЯЛ]: {request_id} ---", flush=True)
                             dynamic_out_queue = data.get("out_queue", OUT_QUEUE) 
+                            
+                            print(f"--- [ВЗЯЛ]: {request_id} --- {dynamic_out_queue}", flush=True)
 
                             # 1. Синтез
                             local_file = await run_synthesis(request_id, text, data.get("model"), data.get("speaker"))
