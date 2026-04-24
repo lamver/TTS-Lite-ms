@@ -84,6 +84,7 @@ async def process_mq_tasks():
                             text = data.get("text")
                             
                             print(f"--- [ВЗЯЛ]: {request_id} ---", flush=True)
+                            dynamic_out_queue = data.get("out_queue", OUT_QUEUE) 
 
                             # 1. Синтез
                             local_file = await run_synthesis(request_id, text, data.get("model"), data.get("speaker"))
@@ -109,7 +110,7 @@ async def process_mq_tasks():
                             res_data = {"requestId": request_id, "status": True, "path": s3_path}
                             await channel.default_exchange.publish(
                                 aio_pika.Message(body=json.dumps(res_data).encode()),
-                                routing_key=OUT_QUEUE
+                                routing_key=dynamic_out_queue
                             )
 
                             if os.path.exists(local_file): os.remove(local_file)
