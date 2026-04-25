@@ -108,16 +108,21 @@ async def process_mq_tasks():
 
                             # 4. Результат
                             res_data = {"requestId": request_id, "status": True, "path": s3_path}
+                            await channel.declare_queue(dynamic_out_queue, durable=True) 
+                            # ЛОГ: Куда отправляем
+                            print(f"--- [ОТПРАВКА]: {request_id} -> очередь: {dynamic_out_queue} ---", flush=True)
+
                             await channel.default_exchange.publish(
                                 aio_pika.Message(body=json.dumps(res_data).encode()),
                                 routing_key=dynamic_out_queue
                             )
 
-                            if os.path.exists(local_file): os.remove(local_file)
                             await message.ack()
                             print(f"--- [УСПЕХ]: {request_id} ---", flush=True)
 
                         except Exception as e:
+                            # В логе ошибок тоже полезно видеть, куда пытались отправить
+                            print(f"--- [ОШИБКА]: {request_id} | {e} | очередь: {dynamic_out_queue} ---", flush=True)
                             print(f"--- [ОШИБКА]: {request_id} | {e} ---", flush=True)
                             # Отправляем ошибку в очередь результатов
                             await send_error_result(channel, request_id, str(e))
