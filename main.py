@@ -24,17 +24,25 @@ S3_CONFIG = {
 }
 BUCKET_NAME = os.getenv("S3_BUCKET")
 
-async def upload_to_s3(local_path, s3_key):
+async def upload_to_s3(local_path, s3_key, metadata=None): # Добавили metadata
     """Загружает файл в S3 и возвращает путь (key)"""
     session = aioboto3.Session()
     async with session.client("s3", **S3_CONFIG) as s3:
         with open(local_path, "rb") as f:
-            await s3.put_object(
-                Bucket=BUCKET_NAME,
-                Key=s3_key,
-                Body=f,
-                ContentType="audio/wav"
-            )
+            # Подготавливаем параметры для загрузки
+            extra_args = {
+                "Bucket": BUCKET_NAME,
+                "Key": s3_key,
+                "Body": f,
+                "ContentType": "audio/wav"
+            }
+            
+            # Если метаданные переданы, добавляем их (S3 требует dict строк)
+            if metadata:
+                extra_args["Metadata"] = {k: str(v) for k, v in metadata.items()}
+
+            await s3.put_object(**extra_args)
+            
     return s3_key
 
 async def send_error_result(channel, request_id, error_message, out_queue):
