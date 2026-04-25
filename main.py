@@ -37,19 +37,7 @@ async def upload_to_s3(local_path, s3_key):
             )
     return s3_key
 
-
-async def send_result(channel, request_id, success: bool):
-    try:
-        payload = json.dumps({"requestId": request_id, "status": success}).encode()
-        await channel.default_exchange.publish(
-            aio_pika.Message(body=payload, delivery_mode=aio_pika.DeliveryMode.PERSISTENT),
-            routing_key=OUT_QUEUE
-        )
-        print(f"--- РЕЗУЛЬТАТ ОТПРАВЛЕН: {request_id} (status: {success}) ---", flush=True)
-    except Exception as e:
-        print(f"--- ОШИБКА ОТПРАВКИ РЕЗУЛЬТАТА: {e} ---", flush=True)
-
-async def send_error_result(channel, request_id, error_message):
+async def send_error_result(channel, request_id, error_message, out_queue):
     """Отправляет отчет об ошибке в результирующую очередь"""
     payload = json.dumps({
         "requestId": request_id,
@@ -62,7 +50,7 @@ async def send_error_result(channel, request_id, error_message):
             body=payload, 
             delivery_mode=aio_pika.DeliveryMode.PERSISTENT
         ),
-        routing_key=OUT_QUEUE
+        routing_key=out_queue
     )
     
 async def process_mq_tasks():
@@ -87,7 +75,7 @@ async def process_mq_tasks():
                             print(f"--- [ВЗЯЛ]: {request_id} --- out -> {dynamic_out_queue}", flush=True)
 
                             # 1. Синтез
-                            local_file = await run_synthesis(request_id, text, data.get("model"), data.get("speaker"))
+                            local_file = await run_synthesis(request_id, text, data.get("model"), data.get("speakerId"))
                             
                             if local_file is None:
                                 raise ValueError("run_synthesis returned None. Check return statement!")
@@ -125,7 +113,7 @@ async def process_mq_tasks():
                             print(f"--- [ОШИБКА]: {request_id} | {e} | очередь: {dynamic_out_queue} ---", flush=True)
                             print(f"--- [ОШИБКА]: {request_id} | {e} ---", flush=True)
                             # Отправляем ошибку в очередь результатов
-                            await send_error_result(channel, request_id, str(e))
+                            await send_error_result(channel, request_id, str(e), dynamic_out_queue)
                             await message.ack()
         except Exception as e:
             print(f"--- [КРИТИЧЕСКАЯ ОШИБКА MQ]: {e} ---", flush=True)
