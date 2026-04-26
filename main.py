@@ -6,11 +6,13 @@ import wave
 import json
 import glob
 import aioboto3
+from urllib.parse import quote
 from fastapi import FastAPI, HTTPException, Query, Response, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
 from piper.voice import PiperVoice
 
 app = FastAPI(title="Piper TTS Microservice")
+
 
 RABBIT_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
 IN_QUEUE = os.getenv("QUEUE_NAME", "text_to_voice_lite_piter")
@@ -39,7 +41,10 @@ async def upload_to_s3(local_path, s3_key, metadata=None): # Добавили me
             
             # Если метаданные переданы, добавляем их (S3 требует dict строк)
             if metadata:
-                extra_args["Metadata"] = {k: str(v) for k, v in metadata.items()}
+                extra_args["Metadata"] = {
+                    k: quote(str(v)) if isinstance(v, str) else str(v) 
+                    for k, v in metadata.items()
+                }
 
             await s3.put_object(**extra_args)
             
